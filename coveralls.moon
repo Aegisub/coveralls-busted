@@ -3,32 +3,6 @@ require "json"
 
 export ^
 
--- Prosody IM
--- Copyright (C) 2008-2010 Matthew Wild
--- Copyright (C) 2008-2010 Waqas Hussain
---
--- This project is MIT/X11 licensed. Please see the
--- COPYING file in the source package for more information.
---
--- This copyright applies to formencodepart and formencode
-formencodepart = (s) ->
-	return s and s\gsub "%W", (c) ->
-			if c ~= " "
-				string.format "%%%02x", c\byte!
-			else
-				"+"
-
-formencode = (form) ->
-	result = {}
-	if form[1] -- Array of ordered { name, value }
-		for _, field in ipairs form  do
-			table.insert result, formencodepart(field.name).."="..formencodepart(field.value)
-	else -- Unordered map of name -> value
-		for name, value in pairs(form) do
-			table.insert result, formencodepart(name).."="..formencodepart(value)
-
-	table.concat result, "&"
-
 class coveralls extends coverage.CodeCoverage
 	Travis: "travis-ci"
 	Jenkins: "jenkins"
@@ -103,51 +77,36 @@ class coveralls extends coverage.CodeCoverage
 				when @@Debug
 					moon = require "moon"
 					moon.p @__source_files
-					json_data = json.encode {
-						service_name: @service_name,
-						service_job_id: @service_job_id,
-						repo_token: @repo_token,
-						source_files: @__source_files,
-					}
-					print json_data
-					print #json_data
-					form_data = formencode { json: json_data }
-					print form_data
-					print #form_data
+					print json.encode
+						service_name: @service_name
+						service_job_id: @service_job_id
+						repo_token: @repo_token
+						source_files: @__source_files
 					return
 
 			@service_job_id = os.getenv env
 
 		assert @service_job_id, "A service_job_id must be specified"
 
-		form_data = formencode {
-			json: json.encode {
-				service_name: @service_name,
-				service_job_id: @service_job_id,
-				repo_token: @repo_token,
-				source_files: @__source_files,
-			}
-		}
+		tmpnam = os.tmpname!
+		file = io.open tmpnam, 'w'
+		file\write json.encode
+			service_name: @service_name
+			service_job_id: @service_job_id
+			repo_token: @repo_token
+			source_files: @__source_files
+		file\close!
 
-		https = require "ssl.https"
-		require "socket"
-		retry = 0
-		send = ->
-			body, code, headers, status = https.request 'https://coveralls.io/api/v1/jobs', form_data
+		curl = io.popen "curl --form json_file=@#{tmpnam} https://coveralls.io/api/v1/jobs"
+		response = curl\read '*all'
+		curl\close!
 
-			-- HTML response. sleep 30 seconds and try again
-			if body\match "^<"
-				print "Coveralls returned HTML. This shouldn't happen. Trying again in 30 seconds"
-				retry += 1
-				return 500, "Failed to get a correct response from coveralls.io", {message: "Service may be unavailable"} if retry > 5
-				socket.select(nil, nil, 30)
-				return send!
+		os.remove tmpnam
 
-			code, status, json.decode body
+		if response\match '^<'
+			error "Error updating Coveralls: #{response}"
 
-		code, status, msg = send!
-
-		assert code == 200, string.format "Error updating Coveralls: (status: %s) (response: %s)", status, msg.message
+		msg = json.decode response
 		print msg.url
 
 Coveralls = coveralls!
